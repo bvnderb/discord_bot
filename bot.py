@@ -2,12 +2,14 @@ import discord
 from discord.ext import commands
 import json
 import datetime
-import asyncio
 import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord.ui import View, Button
 from math import ceil
+import asyncio
 
+
+############# CORE FUNCTIONS - directory paths, create paths and files, bot intents, backup, etc... #############
 # Define the directory paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -32,66 +34,46 @@ ALLOWED_CHANNEL_IDS = config['allowed_channel_ids']
 # Define bot
 bot = commands.Bot(intents=intents, command_prefix=PREFIX)
 
-# Load points data from points.json in the data folder
-points_file_path = os.path.join(DATA_DIR, 'points.json')
-if os.path.exists(points_file_path):
-    with open(points_file_path, 'r') as f:
-        points = json.load(f)
-else:
-    points = {}
+# Define file paths for tracking GC
+gc_file_path = os.path.join(DATA_DIR, 'gc.json')
+lttgc_file_path = os.path.join(DATA_DIR, 'lttgc.json')
 
-# Save points data
-def save_points():
-    with open(points_file_path, 'w') as f:
-        json.dump(points, f, indent=4)
+# Initialize GC data files if they don't exist
+if not os.path.exists(gc_file_path):
+    with open(gc_file_path, 'w') as f:
+        json.dump({}, f, indent=4)
+
+if not os.path.exists(lttgc_file_path):
+    with open(lttgc_file_path, 'w') as f:
+        json.dump({}, f, indent=4)
+
+# Load points data from JSON files
+with open(gc_file_path, 'r') as f:
+    gc_data = json.load(f)
+
+with open(lttgc_file_path, 'r') as f:
+    lttgc_data = json.load(f)
+
+# Save points data to files
+def save_gc():
+    with open(gc_file_path, 'w') as f:
+        json.dump(gc_data, f, indent=4)
+
+def save_lttgc():
+    with open(lttgc_file_path, 'w') as f:
+        json.dump(lttgc_data, f, indent=4)
 
 # Backup points data
 def backup_points():
     backup_file_path = os.path.join(DATA_DIR, 'points_backup.txt')
     with open(backup_file_path, 'w') as f:
-        for guild_id, users in points.items():
+        for guild_id, users in gc_data.items():
             f.write(f"Guild ID: {guild_id}\n")
             for user_id, data in users.items():
-                f.write(f"User ID: {user_id}, God Coins: {data['gc']}, Last Claimed: {data['last_claimed']}\n")
+                f.write(f"User ID: {user_id}, Balance GC: {data['gc']}, Lifetime GC: {lttgc_data[guild_id].get(user_id, 0)}\n")
             f.write("\n")
 
-# Daily reset
-async def tick():
-    try:
-        guild = bot.get_guild(GUILD_ID)
-        guild_id = str(guild.id)
-        
-        sorted_gc_data = sorted(points.get(str(guild_id), {}).items(), key=lambda x: x[1]['gc'], reverse=True)
-        for idx, (user_id, data) in enumerate(sorted_gc_data, start=1):
-            last_claimed = data['last_claimed']
-            if not last_claimed:
-                continue  # Skip if last_claimed is empty
-            yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
-            last_claimed_date = datetime.datetime.strptime(last_claimed, '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc)
-            
-            if last_claimed_date < yesterday:
-                # print(f"Reset streak of {user_id}")
-                # data['streak'] = 0
-                data['last_claimed'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-                save_points()
-    except Exception as e:
-        print(f"Error in tick function: {e}")
-
-# used for the streaks
-# def clamp(n, minn, maxn):
-#     return max(min(maxn, n), minn)
-
-# used for the daily reset and streak
-async def main():
-    print('Starting main function...')
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(tick, 'interval', seconds=86400)  # Run daily
-    scheduler.start()
-    print('Scheduler started.')
-    
-    # Use an asyncio event to keep the program running
-    event = asyncio.Event()
-    await event.wait()
+############# CORE COMMAND - CLAIM #############
 
 # Command to claim daily GC
 @bot.tree.command(name="claim", description="Claim your daily God Coins with this command.")
@@ -107,8 +89,12 @@ async def claim(ctx):
         today = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
         now = datetime.datetime.now(datetime.timezone.utc)
 
-        points.setdefault(guild_id, {})
-        user_data = points[guild_id].setdefault(user_id, {"gc": 0, "last_claimed": ""})
+        # Ensure lttgc_data has the guild_id and user_id initialized
+        lttgc_data.setdefault(guild_id, {})
+        lttgc_data[guild_id].setdefault(user_id, 0)  # Initialize user lifetime GC if not present
+
+        gc_data.setdefault(guild_id, {})
+        user_data = gc_data[guild_id].setdefault(user_id, {"gc": 0, "last_claimed": ""})
         user_data.setdefault('gc', 0)
 
         if user_data['last_claimed']:
@@ -119,19 +105,224 @@ async def claim(ctx):
                 await response.send_message(f'You have already claimed your daily God Coins for today, try again at {next_claim_time_str}', ephemeral=True)
                 return
 
-        # Commented out streak logic
         claim_gc = 10
         user_data['gc'] += claim_gc
+        lttgc_data[guild_id][user_id] += claim_gc  # Add claim_gc to user's lifetime GC
         user_data['last_claimed'] = today
-        save_points()
-        await response.send_message(f"{ctx.user.mention} You claimed {claim_gc} God Coins successfully! Total God Coins: {user_data['gc']}", ephemeral=True)
+        save_gc()
+        save_lttgc()
+        await response.send_message(f"{ctx.user.mention} You claimed {claim_gc} God Coins successfully! Total GC balance: {user_data['gc']}", ephemeral=True)
     else:
         await response.send_message("You do not have permission to use this command.", ephemeral=True)
 
+                                    ############# LOGIC FOR THE DAILY RESET #############
 
-############# CHECK PERSONAL GC + LEADERBOARD #############
+# daily reset to check if already been claimed
+async def tick():
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        guild_id = str(guild.id)
+        
+        sorted_gc_data = sorted(gc_data.get(guild_id, {}).items(), key=lambda x: x[1]['gc'], reverse=True)
+        for idx, (user_id, data) in enumerate(sorted_gc_data, start=1):
+            last_claimed = data['last_claimed']
+            if not last_claimed:
+                continue  # Skip if last_claimed is empty
+            yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+            last_claimed_date = datetime.datetime.strptime(last_claimed, '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc)
+            
+            if last_claimed_date < yesterday:
+                data['last_claimed'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+                save_gc()
+    except Exception as e:
+        print(f"Error in tick function: {e}")
 
-# Command to display GC leaderboard
+# used for the daily resets
+async def main():
+    print('Starting main function...')
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(tick, 'interval', seconds=86400)  # Run daily
+    scheduler.start()
+    print('Scheduler started.')
+    
+    # Use an asyncio event to keep the program running
+    event = asyncio.Event()
+    await event.wait()
+
+
+############# GC MANAGEMENT - give, deduct, reset #############
+
+# Command to give GC to others (user)
+@bot.tree.command(name="give", description='Give GC to a specific user.')
+async def give(ctx, user: discord.User, amount: int, reason: str = None):
+    response: discord.InteractionResponse = ctx.response
+    if discord.utils.get(ctx.user.roles, name="Admin"):
+        guild = bot.get_guild(GUILD_ID)
+
+        if not guild:
+            await response.send_message("Guild not found.", ephemeral=True)
+            return
+        
+        if amount < 0:
+            await response.send_message("You cannot give a negative amount of God Coins.", ephemeral=True)
+            return
+
+        user_id = str(user.id)
+        guild_id = str(guild.id)
+        gc_data.setdefault(guild_id, {})
+        user_data = gc_data[guild_id].setdefault(user_id, {'gc': 0, 'last_claimed': ''})
+
+        user_data['gc'] += amount
+        lttgc_data[guild_id][user_id] = lttgc_data[guild_id].get(user_id, 0) + amount
+
+        try:
+            dm_channel = await user.create_dm()
+            dm_message = f"Hello {user.display_name},\n\n{ctx.user.name} has given you {amount} God Coins."
+            if reason:
+                dm_message += f"\nReason: {reason}"
+            await dm_channel.send(dm_message)
+        except discord.Forbidden:
+            await response.send_message(f"{user.display_name} has their DMs disabled, but the coins were added successfully.", ephemeral=True)
+        
+        save_gc()  # Save GC data
+        save_lttgc()  # Save LTTGC data
+        await response.send_message(f"You have successfully given {amount} God Coins to {user.display_name}.", ephemeral=True)
+    else:
+        await response.send_message("You do not have permission to give God Coins.", ephemeral=True)
+
+# Command to give GC to roles (role)
+@bot.tree.command(name="giverole", description="Give GC to all members of a single role.")
+async def give_role(ctx, role: discord.Role, amount: int, reason: str = "No reason provided"):
+    response: discord.InteractionResponse = ctx.response
+    
+    if discord.utils.get(ctx.user.roles, name="Admin"):
+        guild = bot.get_guild(GUILD_ID)
+
+        if not guild:
+            await response.send_message("Guild not found.", ephemeral=True)
+            return
+
+        if amount < 0:
+            await response.send_message("You cannot give a negative amount of God Coins.", ephemeral=True)
+            return
+
+        members = role.members
+        for member in members:
+            user_id = str(member.id)
+            guild_id = str(guild.id)
+            gc_data.setdefault(guild_id, {})
+            user_data = gc_data[guild_id].setdefault(user_id, {'gc': 0, 'last_claimed': ''})
+
+            user_data['gc'] += amount
+            lttgc_data[guild_id][user_id] = lttgc_data[guild_id].get(user_id, 0) + amount
+
+            try:
+                dm_channel = await member.create_dm()
+                dm_message = (f"Hello {member.display_name},\n\n{ctx.user.name} has given you {amount} God Coins.\n\n"
+                              f"Reason: {reason}")
+                await dm_channel.send(dm_message)
+            except discord.Forbidden:
+                pass
+
+        save_gc()  # Save GC data
+        save_lttgc()  # Save LTTGC data
+        await response.send_message(f"You have successfully given {amount} God Coins to all members of {role.name}.", ephemeral=True)
+    else:
+        await response.send_message("You do not have permission to give God Coins.", ephemeral=True)
+
+# Command to deduct GC from a user
+@bot.tree.command(name="deduct", description="Deduct GC from a user with a reason.")
+async def deduct(interaction: discord.Interaction, member: discord.Member, amount: int, reason: str):
+    """Command to deduct GC from a user's balance, accessible only by admins."""
+    
+    # Check if the user has admin permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    guild_id = str(interaction.guild.id)
+
+    # Call the deduct_gc function to perform the deduction
+    if deduct_gc(user_id, guild_id, amount, reason):
+        # Notify the user that their GC balance has been deducted
+        await member.send(f"Your GC balance has been reduced by {amount} points. Reason: {reason}")
+        
+        # Inform the admin who triggered the command
+        await interaction.response.send_message(f"{amount} GC has been deducted from {member.name}'s balance. Reason: {reason}.", ephemeral=True)
+    else:
+        # If the deduction failed (e.g., insufficient balance)
+        await interaction.response.send_message(f"Failed to deduct GC from {member.name}. They may not have enough GC.", ephemeral=True)
+
+def deduct_gc(user_id, guild_id, amount, reason):
+    """Deduct the given amount of GC from a user's balance and record the reason."""
+    # Ensure gc_data is properly initialized for the guild and user
+    if user_id in gc_data.get(guild_id, {}):
+        user_data = gc_data[guild_id][user_id]
+        
+        # Check if the user has enough GC to deduct
+        if user_data['gc'] >= amount:
+            user_data['gc'] -= amount
+            save_gc()  # Save GC data after deduction
+            
+            # Optionally log the reason or take other actions (e.g., save the reason to a log)
+            print(f"Deducted {amount} GC from {user_id} for reason: {reason}")  # Example log
+            return True
+    return False
+
+# Reset GC of all users
+@bot.tree.command(name="reset_gc", description="Reset the GC balance of all users.")
+async def reset_gc(ctx):
+    response = ctx.response
+
+    guild_id = str(ctx.guild.id)
+
+# Command to reset GC
+@bot.tree.command(name="reset_gc", description="Reset the GC balance of all users.")
+async def reset_gc(ctx):
+    response = ctx.response
+
+    guild_id = str(ctx.guild.id)
+
+    # Backup the current GC data before resetting
+    backup_points()
+
+    # Reset the GC balance for all users in the guild
+    if guild_id in gc_data:
+        for user_id in list(gc_data[guild_id].keys()):
+            gc_data[guild_id][user_id]['gc'] = 0  # Reset only the GC balance, not lttgc
+
+        save_gc()  # Save the updated GC data after reset
+
+        await response.send_message(f"All GC balances have been reset for the clan.")
+    else:
+        await response.send_message("No GC data found for this clan.", ephemeral=True)
+
+# Command to reset daily claims for all users
+@bot.tree.command(name="reset_daily", description="Reset daily claims for all users.")
+@commands.has_role('Admin')
+async def reset_daily_claims(interaction: discord.Interaction):
+    """Resets daily claims for all users in the guild."""
+    
+    # Get the guild object from the interaction
+    guild = interaction.guild
+    guild_id = str(guild.id)
+
+    # Check if the points data exists for the guild
+    if guild_id in gc_data:  # Assuming gc_data holds the user claim data
+        for user_id, data in gc_data[guild_id].items():
+            data['last_claimed'] = ""  # Reset the 'last_claimed' field for all users
+        save_gc()  # Save the updated GC data
+        
+        # Send a confirmation message to the user who triggered the command
+        await interaction.response.send_message("Daily claims have been reset for all users.", ephemeral=True)
+    else:
+        # Send an error message if no points data is found for the guild
+        await interaction.response.send_message("No GC data found to reset.", ephemeral=True)
+
+############# LEADERBOARD + GC BALANCE #############
+
+# Command to display LTTGC leaderboard (Only Lifetime GC)
 @bot.tree.command(name="leaderboard", description="Shows the leaderboard.")
 async def leaderboard(ctx):
     response: discord.InteractionResponse = ctx.response
@@ -143,32 +334,43 @@ async def leaderboard(ctx):
         await response.send_message("Guild not found.", ephemeral=True)
         return
 
-    sorted_gc_data = sorted(
-    [(user_id, {**data, "gc": data.get("gc", 0)}) for user_id, data in points.get(str(guild_id), {}).items()],
-    key=lambda x: x[1]["gc"],
-    reverse=True
-)
+    try:
+        sorted_lttgc_data = sorted(
+            [
+                (
+                    user_id, 
+                    {
+                        "lttgc": data if isinstance(data, int) else data.get("lttgc", 0)
+                    }
+                )
+                for user_id, data in lttgc_data.get(guild_id, {}).items()
+            ],
+            key=lambda x: x[1]["lttgc"],
+            reverse=True
+        )
+    except Exception as e:
+        print(f"Error while sorting lttgc data for guild {guild_id}: {e}")
+        await response.send_message("There was an error while generating the leaderboard.", ephemeral=True)
+        return
+
     leaderboard_entries = [
-        f"{idx + 1}. {guild.get_member(int(user_id)).display_name if guild.get_member(int(user_id)) else 'Unknown User'}: {data['gc']} GC"
-        for idx, (user_id, data) in enumerate(sorted_gc_data)
+        f"{idx + 1}. {guild.get_member(int(user_id)).display_name if guild.get_member(int(user_id)) else 'Unknown User'}: {data['lttgc']} Lifetime God Coins"
+        for idx, (user_id, data) in enumerate(sorted_lttgc_data)
     ]
 
-    # Pagination settings
-    entries_per_page = 25
+    entries_per_page = 25x
     total_pages = max(ceil(len(leaderboard_entries) / entries_per_page), 1)
 
     def get_page_content(page: int):
         start_idx = page * entries_per_page
         end_idx = start_idx + entries_per_page
         entries = leaderboard_entries[start_idx:end_idx]
-        leaderboard_msg = f"**Of The Gods Clan GC Leaderboard** (Page {page + 1}/{total_pages})\n\n" + "\n".join(entries)
+        leaderboard_msg = f"**Of The Gods - Lifetime total God Coins - Leaderboard** (Page {page + 1}/{total_pages})\n\n" + "\n".join(entries)
         return leaderboard_msg
 
-    # Initial page setup
     current_page = 0
     message_content = get_page_content(current_page)
 
-    # Create navigation buttons
     class LeaderboardView(View):
         def __init__(self):
             super().__init__()
@@ -178,7 +380,7 @@ async def leaderboard(ctx):
         async def previous_button(self, interaction: discord.Interaction, button: Button):
             nonlocal current_page
             current_page -= 1
-            message_content = get_page_content(current_page)
+            message_content = get_page_content(current_page)  # Update message content on page change
             self.update_buttons()
             await interaction.response.edit_message(content=message_content, view=self)
 
@@ -186,7 +388,7 @@ async def leaderboard(ctx):
         async def next_button(self, interaction: discord.Interaction, button: Button):
             nonlocal current_page
             current_page += 1
-            message_content = get_page_content(current_page)
+            message_content = get_page_content(current_page)  # Update message content on page change
             self.update_buttons()
             await interaction.response.edit_message(content=message_content, view=self)
 
@@ -197,8 +399,8 @@ async def leaderboard(ctx):
     view = LeaderboardView()
     await response.send_message(message_content, view=view, ephemeral=True)
 
-# Command to check user's GC
-@bot.tree.command(name="gc", description="Shows your GC count.")
+# Command to check user's GC balance
+@bot.tree.command(name="gc", description="Shows your GC balance.")
 async def gc(ctx):
     response: discord.InteractionResponse = ctx.response
 
@@ -209,140 +411,25 @@ async def gc(ctx):
 
     if discord.utils.get(guild_member.roles, name='Member') or discord.utils.get(guild_member.roles, name="Trial"):
 
-        user_data = points.get(guild_id, {}).get(user_id)
+        user_data = gc_data.get(guild_id, {}).get(user_id)
         if user_data:
-            await response.send_message(f"{guild_member.mention} You have {user_data['points']} God Coins.", ephemeral=True)
+            await response.send_message(f"{guild_member.mention} You have {user_data['gc']} God Coins in your balance.", ephemeral=True)
         else:
-            await response.send_message(f"{guild_member.mention} You have no God Coins.", ephemeral=True)
+            await response.send_message(f"{guild_member.mention} You have no God Coins in your balance.", ephemeral=True)
     else:
         await response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-############# GOD COIN MANAGEMENT #############
-
-# Command to give GC to others
-@bot.tree.command(name="give", description='Give GC to a specific user.')
-async def give(ctx, user: discord.User, amount: int, reason: str = None):
-    response: discord.InteractionResponse = ctx.response
-    # Check if the user has the Admin role
-    if discord.utils.get(ctx.user.roles, name="Admin"):
-        guild = bot.get_guild(GUILD_ID)
-
-        # Check if the guild is found
-        if not guild:
-            await response.send_message("Guild not found.", ephemeral=True)
-            return
-        
-        user_id = str(user.id)
-        guild_id = str(guild.id)
-        points.setdefault(guild_id, {})
-        user_data = points[guild_id].setdefault(user_id, {'gc': 0, 'last_claimed': ''})
-        user_data['gc'] += amount  # Add the GC to the user
-
-        # Send a DM to the user
-        try:
-            dm_channel = await user.create_dm()
-            dm_message = f"Hello {user.display_name},\n\nYou have received {amount} God Coins. "
-            dm_message += f"Reason: {reason if reason else 'No reason provided.'}\n\nKeep being awesome!"
-            await dm_channel.send(dm_message)
-        except discord.Forbidden:
-            # Handle the case where the bot cannot DM the user
-            print(f"Could not send DM to {user.display_name} (ID: {user.id})")
-
-        # Save the points after giving the GC
-        save_points()
-
-        # Notify the user who triggered the command
-        await response.send_message(f"{amount} GC has been given to {user.display_name}.", ephemeral=True)
-    else:
-        # Notify if the user doesn't have the required permissions
-        await response.send_message("You do not have the required permissions to use this command.", ephemeral=True)
-
-# Command to give GC to all members with a specific role
-@bot.tree.command(name="give_role_gc", description='Give GC to all members with a specific role.')
-async def give_role_gc(ctx, role_name: str, amount: int, reason: str = None):
-    response: discord.InteractionResponse = ctx.response
-    # Check if the user has the Admin role
-    if discord.utils.get(ctx.user.roles, name="Admin"):
-        guild = bot.get_guild(GUILD_ID)
-        
-        # Check if the guild is found
-        if not guild:
-            await response.send_message("Guild not found.", ephemeral=True)
-            return
-        
-        # Find the role by name
-        role = discord.utils.get(guild.roles, name=role_name)
-        
-        # If role doesn't exist, notify the user
-        if not role:
-            await response.send_message(f"Role '{role_name}' not found in the server.", ephemeral=True)
-            return
-        
-        members_with_role = [member for member in guild.members if role in member.roles]
-
-        # If no members with the role, notify the user
-        if not members_with_role:
-            await response.send_message(f"No members found with the '{role_name}' role.", ephemeral=True)
-            return
-        
-        # Defer the response to avoid timeout error if the operation is taking time
-        await response.defer(ephemeral=True)
-
-        # Add the specified amount of GC to each member with the role
-        for member in members_with_role:
-            user_id = str(member.id)
-            guild_id = str(guild.id)
-            points.setdefault(guild_id, {})
-            user_data = points[guild_id].setdefault(user_id, {'gc': 0, 'last_claimed': ''})
-            user_data['gc'] += amount  # Add the GC to the user
-
-            # Send a DM to the user
-            try:
-                dm_channel = await member.create_dm()
-                dm_message = f"Hello {member.display_name},\n\nYou have received {amount} God Coins from the server. "
-                dm_message += f"Reason: {reason if reason else 'No reason provided.'}\n\nKeep being awesome!"
-                await dm_channel.send(dm_message)
-            except discord.Forbidden:
-                # Handle the case where the bot cannot DM the user
-                print(f"Could not send DM to {member.display_name} (ID: {member.id})")
-
-        # Save changes after processing all members
-        save_points()
-
-        # Notify the user about the successful operation
-        await response.send_message(f"{amount} GC has been given to all members with the '{role_name}' role.", ephemeral=True)
-    else:
-        # Notify if the user doesn't have the required permissions
-        await response.send_message("You do not have the required permissions to use this command.", ephemeral=True)
-
-
-############# RESETS #############
-
-# Command to reset all God Coins
-@bot.tree.command(name="reset_gc", description="Reset all GC points in the clan.")
-async def reset_gc(ctx):
-    response: discord.InteractionResponse = ctx.response
-    if discord.utils.get(ctx.user.roles, name="Admin"):
-        points.clear()
-        save_points()
-        await response.send_message("All God Coins have been reset.", ephemeral=True)
-
-# Command to reset daily claims for all users
-@bot.tree.command(name="reset_daily_claims", description="Reset daily claims.")
-async def reset_daily_claims(ctx):
-
 ############# TO START UP THE BOT #############
 
-
-    @bot.event
-    async def on_ready():
+@bot.event
+async def on_ready():
         try:
             print('Bot is ready')
             await bot.tree.sync()
             print('Commands synced.')
-            await main()  # Start the scheduler and other functions after the bot is ready
+            await main()
         except Exception as e:
          print(f"Error in on_ready or main function: {e}")
 
 # Start the bot
-bot.run(TOKEN)  # This should be outside the on_ready function
+bot.run(TOKEN)

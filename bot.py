@@ -10,6 +10,7 @@ import asyncio
 
 
 ############# CORE FUNCTIONS - directory paths, create paths and files, bot intents, backup, etc... #############
+
 # Define the directory paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -115,7 +116,7 @@ async def claim(ctx):
     else:
         await response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-                                    ############# LOGIC FOR THE DAILY RESET #############
+############# LOGIC FOR THE DAILY RESET #############
 
 # daily reset to check if already been claimed
 async def tick():
@@ -154,6 +155,7 @@ async def main():
 
 # Command to give GC to others (user)
 @bot.tree.command(name="give", description='Give GC to a specific user.')
+@commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
 async def give(ctx, user: discord.User, amount: int, reason: str = None):
     response: discord.InteractionResponse = ctx.response
     if discord.utils.get(ctx.user.roles, name="Admin"):
@@ -191,7 +193,8 @@ async def give(ctx, user: discord.User, amount: int, reason: str = None):
         await response.send_message("You do not have permission to give God Coins.", ephemeral=True)
 
 # Command to give GC to roles (role)
-@bot.tree.command(name="giverole", description="Give GC to all members of a single role.")
+@bot.tree.command(name="give_role", description="Give GC to all members of a single role.")
+@commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
 async def give_role(ctx, role: discord.Role, amount: int, reason: str = "No reason provided"):
     response: discord.InteractionResponse = ctx.response
     
@@ -232,13 +235,14 @@ async def give_role(ctx, role: discord.Role, amount: int, reason: str = "No reas
 
 # Command to deduct GC from a user
 @bot.tree.command(name="deduct", description="Deduct GC from a user with a reason.")
+@commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
 async def deduct(interaction: discord.Interaction, member: discord.Member, amount: int, reason: str):
     """Command to deduct GC from a user's balance, accessible only by admins."""
     
     # Check if the user has admin permissions
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
+    #if not interaction.user.guild_permissions.administrator:
+        #await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        #return
 
     user_id = str(member.id)
     guild_id = str(interaction.guild.id)
@@ -270,15 +274,9 @@ def deduct_gc(user_id, guild_id, amount, reason):
             return True
     return False
 
-# Reset GC of all users
-@bot.tree.command(name="reset_gc", description="Reset the GC balance of all users.")
-async def reset_gc(ctx):
-    response = ctx.response
-
-    guild_id = str(ctx.guild.id)
-
 # Command to reset GC
 @bot.tree.command(name="reset_gc", description="Reset the GC balance of all users.")
+@commands.has_any_role('Admin', 'Moderator', 'Captain', 'General')
 async def reset_gc(ctx):
     response = ctx.response
 
@@ -297,10 +295,9 @@ async def reset_gc(ctx):
         await response.send_message(f"All GC balances have been reset for the clan.")
     else:
         await response.send_message("No GC data found for this clan.", ephemeral=True)
-
 # Command to reset daily claims for all users
 @bot.tree.command(name="reset_daily", description="Reset daily claims for all users.")
-@commands.has_role('Admin')
+@commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
 async def reset_daily_claims(interaction: discord.Interaction):
     """Resets daily claims for all users in the guild."""
     
@@ -319,7 +316,7 @@ async def reset_daily_claims(interaction: discord.Interaction):
     else:
         # Send an error message if no points data is found for the guild
         await interaction.response.send_message("No GC data found to reset.", ephemeral=True)
-
+      
 ############# LEADERBOARD + GC BALANCE #############
 
 # Command to display LTTGC leaderboard (Only Lifetime GC)
@@ -354,11 +351,11 @@ async def leaderboard(ctx):
         return
 
     leaderboard_entries = [
-        f"{idx + 1}. {guild.get_member(int(user_id)).display_name if guild.get_member(int(user_id)) else 'Unknown User'}: {data['lttgc']} Lifetime God Coins"
+        f"{idx + 1}. {guild.get_member(int(user_id)).display_name if guild.get_member(int(user_id)) else 'Unknown User'}: {data['lttgc']} LGC"
         for idx, (user_id, data) in enumerate(sorted_lttgc_data)
     ]
 
-    entries_per_page = 25x
+    entries_per_page = 25
     total_pages = max(ceil(len(leaderboard_entries) / entries_per_page), 1)
 
     def get_page_content(page: int):
@@ -426,7 +423,7 @@ async def on_ready():
         try:
             print('Bot is ready')
             await bot.tree.sync()
-            print('Commands synced.')
+            print("Commands available:", [command.name for command in bot.tree.get_commands()])
             await main()
         except Exception as e:
          print(f"Error in on_ready or main function: {e}")

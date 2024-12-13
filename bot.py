@@ -78,11 +78,9 @@ def backup_points():
 
 # Command to claim daily GC
 @bot.tree.command(name="claim", description="Claim your daily God Coins with this command.")
-async def claim(ctx):
-    response: discord.InteractionResponse = ctx.response
-
+async def claim(interaction: discord.Interaction):
     guild = bot.get_guild(GUILD_ID)
-    guild_member = guild.get_member(ctx.user.id)
+    guild_member = guild.get_member(interaction.user.id)
 
     if discord.utils.get(guild_member.roles, name='Member') or discord.utils.get(guild_member.roles, name='Trial'):
         guild_id = str(guild.id)
@@ -92,7 +90,7 @@ async def claim(ctx):
 
         # Ensure lttgc_data has the guild_id and user_id initialized
         lttgc_data.setdefault(guild_id, {})
-        lttgc_data[guild_id].setdefault(user_id, 0)  # Initialize user lifetime GC if not present
+        lttgc_data[guild_id].setdefault(user_id, 0)
 
         gc_data.setdefault(guild_id, {})
         user_data = gc_data[guild_id].setdefault(user_id, {"gc": 0, "last_claimed": ""})
@@ -103,18 +101,19 @@ async def claim(ctx):
             if last_claimed_date.date() >= now.date():
                 next_claim_time = last_claimed_date + datetime.timedelta(days=1)
                 next_claim_time_str = next_claim_time.strftime('%Y-%m-%d %H:%M:%S %Z')
-                await response.send_message(f'You have already claimed your daily God Coins for today, try again at {next_claim_time_str}', ephemeral=True)
+                await interaction.response.send_message(f'You have already claimed your daily God Coins for today, try again at {next_claim_time_str}', ephemeral=True)
                 return
 
         claim_gc = 10
         user_data['gc'] += claim_gc
-        lttgc_data[guild_id][user_id] += claim_gc  # Add claim_gc to user's lifetime GC
+        lttgc_data[guild_id][user_id] += claim_gc
         user_data['last_claimed'] = today
         save_gc()
         save_lttgc()
-        await response.send_message(f"{ctx.user.mention} You claimed {claim_gc} God Coins successfully! Total GC balance: {user_data['gc']}", ephemeral=True)
+
+        await interaction.response.send_message(f"{interaction.user.mention} has successfully claimed {claim_gc} God Coins! 🎉 Total GC balance: {user_data['gc']}")
     else:
-        await response.send_message("You do not have permission to use this command.", ephemeral=True)
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
 ############# LOGIC FOR THE DAILY RESET #############
 
@@ -158,7 +157,7 @@ async def main():
 @commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
 async def give(ctx, user: discord.User, amount: int, reason: str = None):
     response: discord.InteractionResponse = ctx.response
-    if discord.utils.get(ctx.user.roles, name="Admin"):
+    if any(role.name in ['Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General'] for role in ctx.user.roles):
         guild = bot.get_guild(GUILD_ID)
 
         if not guild:
@@ -198,7 +197,7 @@ async def give(ctx, user: discord.User, amount: int, reason: str = None):
 async def give_role(ctx, role: discord.Role, amount: int, reason: str = "No reason provided"):
     response: discord.InteractionResponse = ctx.response
     
-    if discord.utils.get(ctx.user.roles, name="Admin"):
+    if any(role.name in ['Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General'] for role in ctx.user.roles):
         guild = bot.get_guild(GUILD_ID)
 
         if not guild:
@@ -274,12 +273,16 @@ def deduct_gc(user_id, guild_id, amount, reason):
             return True
     return False
 
+
 # Command to reset GC
 @bot.tree.command(name="reset_gc", description="Reset the GC balance of all users.")
 @commands.has_any_role('Admin', 'Moderator', 'Captain', 'General')
 async def reset_gc(ctx):
-    response = ctx.response
+    if not ctx.guild:  # Ensure the command is used in a guild
+        await ctx.response.send_message("This command can only be used in a server (guild).", ephemeral=True)
+        return
 
+    response = ctx.response
     guild_id = str(ctx.guild.id)
 
     # Backup the current GC data before resetting
@@ -292,9 +295,10 @@ async def reset_gc(ctx):
 
         save_gc()  # Save the updated GC data after reset
 
-        await response.send_message(f"All GC balances have been reset for the clan.")
+        await response.send_message(f"All GC balances have been reset for the clan.", ephemeral=True)
     else:
         await response.send_message("No GC data found for this clan.", ephemeral=True)
+      
 # Command to reset daily claims for all users
 @bot.tree.command(name="reset_daily", description="Reset daily claims for all users.")
 @commands.has_any_role('Ranked', 'Admin', 'Moderator', 'Lieutenant', 'Captain', 'General')
@@ -394,7 +398,7 @@ async def leaderboard(ctx):
             self.children[1].disabled = current_page == total_pages - 1
 
     view = LeaderboardView()
-    await response.send_message(message_content, view=view, ephemeral=True)
+    await response.send_message(message_content, view=view, ephemeral=True) # => if we want it to be shown, remove the ephemeral here
 
 # Command to check user's GC balance
 @bot.tree.command(name="gc", description="Shows your GC balance.")
